@@ -12,8 +12,11 @@ Everything lives in this one repository. The submission contract is in
 ## How it works
 
 ```
+container start (CMD)
+  └─ start the model server in the background (loads Qwen2.5-VL-7B onto the GPU)
+
 python3 /app/app.py --index /app/corpus          (once, before any graded clock)
-  ├─ start the model server in the background (loads Qwen2.5-VL-7B onto the GPU)
+  ├─ reuse that server (or start one if it is missing)
   ├─ parse every file in its own process, with a timeout  (CPU, in parallel)
   ├─ send images / scanned pages to the server for transcription
   └─ hand the index to the server and warm up the GPU kernels
@@ -30,7 +33,9 @@ python3 /app/app.py --corpus /app/corpus --query-id query_01 --query "..."
 | [`starter/app/vlm.py`](starter/app/vlm.py) | The single model (Qwen2.5-VL-7B-Instruct, bf16) on the AMD GPU: transcribes images and answers questions. Refuses to run on the CPU. |
 | [`starter/app/server.py`](starter/app/server.py) | Resident model server and client. The harness starts a new process per question, so the model stays loaded here. Detached from the harness's pipes; relaunched by a query if it ever dies. |
 | [`starter/app/rag.py`](starter/app/rag.py) | Retrieval, prompting, grounding, verification and citation selection. |
-| [`starter/Dockerfile`](starter/Dockerfile) | Built on the mandated ROCm base image; ships the weights; no network needed at runtime. |
+| [`starter/Dockerfile`](starter/Dockerfile) | Built on the mandated ROCm base image; ships the weights; no network needed at runtime. Installs `transformers` with `--no-deps` and **fails the build if torch is no longer the ROCm build** (the pip trap in the challenge brief). CMD starts the model server. |
+| [`scripts/amd_deploy.sh`](scripts/amd_deploy.sh) | One command on the AMD machine: GPU and disk checks, weights download, build, ROCm-torch check, size check, selfcheck, full GPU scoring run, push. |
+| [`scripts/score_container.py`](scripts/score_container.py) | Runs the graded flow against the image on the GPU (`--network none`, `--cap-drop DAC_OVERRIDE`), scores every sample question and reports peak VRAM. |
 
 ### Answer pipeline
 
@@ -45,18 +50,51 @@ python3 /app/app.py --corpus /app/corpus --query-id query_01 --query "..."
 5. **Cite** by necessity, in code: the best file containing the answer, plus a
    bridging file only when the answer was reachable solely through it.
 
-## Build and run (AMD GPU)
+## Deploy on AMD Developer Cloud
+
+You need an AMD GPU to build and verify the image. The
+[AMD Developer Cloud](https://lablab.ai/ai-tutorials/amd-developer-cloud-host-llm-vllm)
+(linked from the challenge brief) provides MI300X machines with ROCm and Docker.
+
+1. **Create a GPU droplet**: 1× MI300X, a ROCm image, and **at least 150 GB of
+   disk** (base image 29 GB + weights 17 GB + build layers + the final image).
+   Add your SSH key.
+2. **SSH in and run the deploy script:**
+
+   ```bash
+   git clone https://github.com/harsh543/mc3-groundtruth-rag
+   cd mc3-groundtruth-rag
+   docker login                                   # only needed for the push
+   REMOTE=docker.io/<user>/mc3-groundtruth:v1 ./scripts/amd_deploy.sh
+   ```
+
+   It stops at the first failed step:
+
+   | Step | Check |
+   |---|---|
+   | 1–2 | AMD GPU visible; ≥120 GB free for Docker |
+   | 3 | Downloads Qwen2.5-VL-7B-Instruct into `starter/models/vlm` (not in git) |
+   | 4 | `setup.sh`: empty directory + `chmod 000` file |
+   | 5 | `docker build`; aborts if pip replaced ROCm torch |
+   | 6 | torch in the image ends in `+rocm` and sees the GPU |
+   | 7 | Uncompressed image size under 60 GiB (expect ~46 GiB) |
+   | 8 | Official `selfcheck.py` |
+   | 9 | `score_container.py`: all sample questions on the GPU, peak VRAM in the 1–48 GiB band |
+   | 10 | Tags and pushes to `REMOTE` (skipped if unset) |
+
+3. **Make the registry repository public** (or grant the graders access),
+   then paste the `REMOTE` address into the submission form.
+4. **Destroy the droplet** once the push finishes: GPU machines bill by the hour.
+
+Manual equivalent:
 
 ```bash
-# weights are not in git -- fetch them into the build context
 hf download Qwen/Qwen2.5-VL-7B-Instruct --local-dir starter/models/vlm
-
-./setup.sh                                   # recreate the corpus edge cases
+./setup.sh
 docker build -t mc3-groundtruth:v1 starter/
 python3 selfcheck.py mc3-groundtruth:v1 mc3-corpus
+python3 scripts/score_container.py mc3-groundtruth:v1 mc3-corpus
 ```
-
-Image size is about 46 GiB uncompressed (29.2 GiB base + 16.6 GiB weights).
 
 ## Results so far
 
@@ -70,7 +108,8 @@ question, 30 s limit):
 - Same results on a hostile copy of the corpus (unreadable file sorted first,
   corrupt PDF/XLSX, locked directory, symlink loop).
 
-Not yet run on AMD hardware; the graded corpus is different and harder.
+Not yet run on AMD hardware (`scripts/amd_deploy.sh` is the first AMD run);
+the graded corpus is different and harder.
 
 ## Configuration
 

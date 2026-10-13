@@ -152,9 +152,26 @@ def ping() -> bool:
         return False
 
 
+def loading() -> bool:
+    """True while another server holds the lock, i.e. is still loading the
+    model (the container's CMD starts one before --index runs)."""
+    try:
+        with open(INDEX_DIR / "server.lock", "a") as f:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return True
+            fcntl.flock(f, fcntl.LOCK_UN)
+            return False
+    except OSError:
+        return False
+
+
 def start() -> subprocess.Popen | None:
-    """Launch the server detached. Returns None if one is already up."""
-    if ping():
+    """Launch the server detached. Returns None if one is already up or
+    loading -- wait_ready() then simply waits for it."""
+    INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    if ping() or loading():
         return None
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
     log = open(INDEX_DIR / "server.log", "ab")
@@ -172,7 +189,15 @@ def wait_ready(timeout: float, proc: subprocess.Popen | None = None) -> None:
         if ping():
             return
         if proc is not None and proc.poll() is not None:
+            if proc.returncode == 0 and loading():
+                proc = None  # lost the lock to a server that is already loading
+                continue
             raise RuntimeError(f"model server exited with {proc.returncode}:\n{log_tail()}")
+        if proc is None and not loading():
+            # the server we were waiting on (e.g. the CMD's) died: relaunch once
+            proc = start()
+            if proc is None and not ping():
+                raise RuntimeError(f"model server unavailable:\n{log_tail()}")
         time.sleep(0.5)
     raise TimeoutError(f"model server not ready after {timeout:.0f}s:\n{log_tail()}")
 

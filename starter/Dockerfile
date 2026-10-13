@@ -27,7 +27,16 @@ WORKDIR /app
 #   hf download Qwen/Qwen2.5-VL-7B-Instruct --local-dir starter/models/vlm
 
 COPY app/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+# transformers goes in with --no-deps: resolving its torch dependency would
+# replace the ROCm torch with a CUDA build (see requirements.txt). The build
+# then FAILS if torch is not the ROCm build, or if any import is missing.
+RUN pip install --no-cache-dir -r /app/requirements.txt \
+ && pip install --no-cache-dir --no-deps transformers==5.19.0 \
+ && python3 -c "import torch, sys; v = torch.__version__; print('torch', v); \
+sys.exit(0 if '+rocm' in v else 'torch is not the ROCm build: ' + v)" \
+ && python3 -c "import transformers, pypdf, docx, openpyxl, pypdfium2, cryptography; \
+from transformers import AutoModelForImageTextToText, AutoProcessor; \
+print('transformers', transformers.__version__)"
 
 # Weights after pip, code last: editing app/ never re-copies 16 GiB.
 COPY models/ /models/
@@ -47,8 +56,10 @@ COPY app/ /app/
 # reading /app/output/query_01_output.json after each. The corpus is copied in
 # for you at evaluation time; both directories are created if missing, but
 # creating them here costs nothing and makes local testing behave identically.
-RUN mkdir -p /app/corpus /app/output
+RUN mkdir -p /app/corpus /app/output /app/index
 
-# No service, no port, no entrypoint script. The container only has to stay up
-# long enough to be exec'd into, which is what this does.
-CMD ["sleep", "infinity"]
+# No port, no entrypoint script. The container must stay up to be exec'd into
+# (sleep), and the model server starts here, at container start, so the model
+# is loading on the GPU before --index even runs. --index reuses this server
+# (and starts one itself only if it is missing).
+CMD ["sh", "-c", "python3 /app/server.py >> /app/index/server.log 2>&1 & exec sleep infinity"]

@@ -1,9 +1,24 @@
-# torch and PIL come from the ROCm base image -- do NOT list torch here, or pip
-# may replace the ROCm build with a CUDA/CPU wheel and you lose the GPU.
+# torch, torchvision and PIL come from the ROCm base image. NOTHING here may
+# depend on torch: pip would resolve that dependency by installing a CUDA build
+# of torch over the ROCm one (the challenge brief measured exactly this with
+# `pip install -U transformers`). transformers itself is therefore installed
+# separately with --no-deps in the Dockerfile, and its own dependencies -- none
+# of which need torch -- are listed here. Versions are the ones tested.
+
+# document parsers
 pypdf>=5.0
 cryptography>=42      # lets pypdf read AES-encrypted PDF headers without crashing
 pypdfium2>=4.30       # renders scanned PDF pages for the VLM
 python-docx>=1.1
 openpyxl>=3.1
-transformers>=4.56
-accelerate>=1.0
+
+# transformers==5.19.0 dependencies (transformers is installed with --no-deps)
+huggingface_hub==2.2.0
+tokenizers==0.23.3
+safetensors==0.8.0
+regex==2026.9.29
+pyyaml==6.0.3
+packaging==26.3
+tqdm==4.70.1
+typer==0.27.3
+numpy
