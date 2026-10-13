@@ -1,0 +1,9 @@
+# torch and PIL come from the ROCm base image -- do NOT list torch here, or pip
+# may replace the ROCm build with a CUDA/CPU wheel and you lose the GPU.
+pypdf>=5.0
+cryptography>=42      # lets pypdf read AES-encrypted PDF headers without crashing
+pypdfium2>=4.30       # renders scanned PDF pages for the VLM
+python-docx>=1.1
+openpyxl>=3.1
+transformers>=4.56
+accelerate>=1.0

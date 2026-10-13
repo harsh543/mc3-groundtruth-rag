@@ -1,0 +1,9 @@
+# model weights ship in the Docker image, never in git (~16 GB)
+starter/models/
+
+# runtime artifacts
+index/
+output/
+__pycache__/
+*.pyc
+.DS_Store
